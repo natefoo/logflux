@@ -20,6 +20,10 @@ from influxdb import InfluxDBClient
 CONFIG_DEFAULT = 'logflux.yaml'
 SOCK = '/run/logflux.sock'
 DATABASE = 'logflux'
+TYPE_MAP = {
+    'int': int,
+    'float': float,
+}
 
 
 class MessageHandler(socketserver.BaseRequestHandler):
@@ -133,6 +137,11 @@ class LogFluxApplication(object):
 
     def rule_value_lookup(self, rule, msg, match, lookup):
         value = None
+        valtypef = None
+        if isinstance(lookup, dict):
+            if 'type' in lookup:
+                valtypef = TYPE_MAP[lookup['type']]
+            lookup = lookup['lookup']
         try:
             if '.' in lookup:
                 value = self.rule_value_match_lookup(rule, match, lookup)
@@ -142,6 +151,8 @@ class LogFluxApplication(object):
             self.log("error: invalid field/tag reference: {}; matches were:", lookup)
             for k, v in match.groupdict().items():
                 self.log("  {}: {}", k, v)
+        if value and valtypef:
+            value = valtypef(value)
         return value
 
     def get_fields_tags(self, lookup_type, rule, msg, match, default=None):

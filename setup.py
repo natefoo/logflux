@@ -9,7 +9,7 @@ with open('requirements.txt') as fh:
 
 setup(
     name = 'logflux',
-    version = '0.2',
+    version = '0.2.1',
     packages = find_packages(),
     description = '(r)syslog-to-influxdb translator',
     long_description = 'Read messages from rsyslog via a socket and send regex-parsed values to InfluxDB',

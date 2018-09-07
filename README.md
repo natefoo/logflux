@@ -75,7 +75,9 @@ rules:
       key: message
       regex: '^nginx:.* limiting requests, excess: (?P<excess>\d+\.\d+) by zone "(?P<zone>[^"]+)", client: (?P<client>[^,]+)'
     fields:
-      value: message.excess
+      value:
+        lookup: message.excess
+        type: float
     tags:
       zone: message.zone
       client: message.client
