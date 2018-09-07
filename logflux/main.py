@@ -11,7 +11,11 @@ try:
 except ImportError:
     import SocketServer as socketserver
 from errno import ENOENT
-from os import unlink
+from os import (
+    getpid,
+    unlink
+)
+from threading import current_thread
 
 import yaml
 from influxdb import InfluxDBClient
@@ -29,6 +33,27 @@ TYPE_MAP = {
 class MessageHandler(socketserver.BaseRequestHandler):
     def handle(self):
         self.server.app.handle(self)
+
+
+class ForkingServer(socketserver.ForkingMixIn, socketserver.UnixDatagramServer):
+    def log(self, msg, *args, **kwargs):
+        log('[pid {}] {}'.format(getpid(), msg), *args, **kwargs)
+
+
+class ThreadingServer(socketserver.ThreadingMixIn, socketserver.UnixDatagramServer):
+    def log(self, msg, *args, **kwargs):
+        log('[tid {}] {}'.format(current_thread().ident, msg), *args, **kwargs)
+
+
+class Server(socketserver.UnixDatagramServer):
+    def log(self, msg, *args, **kwargs):
+        log(msg, *args, **kwargs)
+
+
+SERVER_CLASS_MAP = {
+    'forking': ForkingServer,
+    'threading': ThreadingServer,
+}
 
 
 class LogFluxApplication(object):
@@ -60,8 +85,12 @@ class LogFluxApplication(object):
             self.__client = InfluxDBClient(**self.influx_config)
         return self.__client
 
+    def debug(self, msg, *args, **kwargs):
+        if self.args.debug:
+            self.log(msg, *args, **kwargs)
+
     def log(self, msg, *args, **kwargs):
-        log('[msg {}]: {}'.format(self.message_id, msg), *args, **kwargs)
+        self.server.log('[msg {}]: {}'.format(self.message_id, msg), *args, **kwargs)
 
     def setup(self):
         self.parse_arguments()
@@ -72,6 +101,7 @@ class LogFluxApplication(object):
     def parse_arguments(self):
         parser = argparse.ArgumentParser(description='Feed syslog messages to InfluxDB')
         parser.add_argument('--config', '-c', default=CONFIG_DEFAULT)
+        parser.add_argument('--debug', '-d', action='store_true', default=False)
         self.args = parser.parse_args()
 
     def read_config(self):
@@ -79,6 +109,10 @@ class LogFluxApplication(object):
         with open(self.args.config) as config_fh:
             self.config = yaml.safe_load(config_fh)
         self.rules = self.config.get('rules', [])
+        if self.config.get('message_format') == 'json':
+            self.message_loader = self.load_message_json
+        elif self.config.get('message_format') == 'legacy':
+            self.message_loader = self.load_message_legacy
 
     def compile_rules(self):
         log('compiling rule regular expressions...')
@@ -193,7 +227,14 @@ class LogFluxApplication(object):
 
     def send_points(self, points):
         for point in points:
-            self.log('sending measurement to InfluxDB: {}', str(point))
+            tags = ''
+            if point.get('tags'):
+                tags = ',' + fmtarg(point.get('tags', {}))
+            self.log('{measurement}{tags} {fields} {timestamp}'.format(
+                measurement=point['measurement'],
+                tags=tags,
+                fields=fmtarg(point['fields']),
+                timestamp=point['time']))
         if points:
             self.client.write_points(points)
 
@@ -201,7 +242,7 @@ class LogFluxApplication(object):
         self.message_id += 1
         points = []
         raw = handler.request[0]
-        self.log('received message: {}', raw)
+        self.debug('received message: {}', raw)
         try:
             msg = self.load_message(raw)
             if not msg:
@@ -218,7 +259,10 @@ class LogFluxApplication(object):
             if exc.errno != ENOENT:
                 raise
         log('binding socket {}', self.socket)
-        self.server = socketserver.UnixDatagramServer(self.socket, MessageHandler)
+        if self.config.get('server_type'):
+            self.server = SERVER_CLASS_MAP[self.config['server_type']](self.socket, MessageHandler)
+        else:
+            self.server = Server(self.socket, MessageHandler)
         self.server.app = self
         try:
             self.server.serve_forever()
@@ -231,6 +275,19 @@ def log(msg, *args, **kwargs):
     if exception and sys.exc_info()[0] is not None:
         print(traceback.format_exc(), end='', file=sys.stderr)
     print(msg.format(*args, **kwargs), file=sys.stderr)
+
+
+def influxarg(v):
+    if isinstance(v, float):
+        return str(v)
+    elif isinstance(v, int):
+        return str(v) + 'i'
+    else:
+        return '"' + str(v).replace('"', '\\"') + '"'
+
+
+def fmtarg(d):
+    return ','.join(['{}={}'.format(k, influxarg(v)) for k, v in d.items()])
 
 
 def main():
