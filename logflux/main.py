@@ -35,6 +35,7 @@ class LogFluxApplication(object):
         self.__client = None
         self.server = None
         self.message_id = 0
+        self.message_loader = None
         self.setup()
 
     @property
@@ -89,11 +90,31 @@ class LogFluxApplication(object):
         self.client.create_database(self.database)
         self.client.switch_database(self.database)
 
+    def load_message_json(self, raw):
+        return json.loads(raw.decode('utf-8').strip())
+
+    def load_message_legacy(self, raw):
+        r = {}
+        lines = iter(raw.decode('utf-8').splitlines())
+        for line in lines:
+            if line:
+                k, v = line.split(': ', 1)
+                r[k] = v
+            else:
+                break
+        r['message'] = '\n'.join(lines)
+        return r
+
     def load_message(self, raw):
-        try:
-            return json.loads(raw.decode('utf-8').strip())
-        except ValueError as exc:
-            self.log('Loading as JSON failed')
+        if not self.message_loader:
+            try:
+                self.load_message_json(raw)
+                self.message_loader = self.load_message_json
+                log('first message appears to be JSON format, setting loader to JSON')
+            except ValueError as exc:
+                log('first message does not appear to be JSON format, setting loader to legacy')
+                self.message_loader = self.load_message_legacy
+        return self.message_loader(raw)
 
     def check_re(self, msg, key, pattern):
         try:
