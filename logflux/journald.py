@@ -1,59 +1,34 @@
 #!/usr/bin/env python
-from __future__ import print_function
-
 import argparse
+import datetime
+import os.path
 import json
 import re
 import sys
 import traceback
-try:
-    import socketserver
-except ImportError:
-    import SocketServer as socketserver
 from errno import ENOENT
 from os import (
     getpid,
     unlink
 )
 from threading import current_thread
+from time import sleep
+from datetime import timezone
 
+import tzlocal
 import yaml
 from influxdb import InfluxDBClient
+from systemd import journal
 
 
 CONFIG_DEFAULT = 'logflux.yaml'
-SOCK = '/run/logflux.sock'
+LAST_TIMESTAMP = '.last_timestamp'
 DATABASE = 'logflux'
 TYPE_MAP = {
     'int': int,
     'float': float,
 }
-
-
-class MessageHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        self.server.app.handle(self)
-
-
-class ForkingServer(socketserver.ForkingMixIn, socketserver.UnixDatagramServer):
-    def log(self, msg, *args, **kwargs):
-        log('[pid {}] {}'.format(getpid(), msg), *args, **kwargs)
-
-
-class ThreadingServer(socketserver.ThreadingMixIn, socketserver.UnixDatagramServer):
-    def log(self, msg, *args, **kwargs):
-        log('[tid {}] {}'.format(current_thread().ident, msg), *args, **kwargs)
-
-
-class Server(socketserver.UnixDatagramServer):
-    def log(self, msg, *args, **kwargs):
-        log(msg, *args, **kwargs)
-
-
-SERVER_CLASS_MAP = {
-    'forking': ForkingServer,
-    'threading': ThreadingServer,
-}
+VERBOSE = False
 
 
 class LogFluxApplication(object):
@@ -61,6 +36,7 @@ class LogFluxApplication(object):
         self.args = None
         self.config = None
         self.rules = []
+        self.field_matches = {}
         self.__client = None
         self.server = None
         self.message_id = 0
@@ -87,39 +63,41 @@ class LogFluxApplication(object):
 
     def debug(self, msg, *args, **kwargs):
         if self.args.debug:
-            self.log(msg, *args, **kwargs)
-
-    def log(self, msg, *args, **kwargs):
-        self.server.log('[msg {}]: {}'.format(self.message_id, msg), *args, **kwargs)
+            log(msg, *args, **kwargs)
 
     def setup(self):
         self.parse_arguments()
         self.read_config()
         self.compile_rules()
-        self.setup_influx()
+        if not self.args.telegraf:
+            self.setup_influx()
 
     def parse_arguments(self):
         parser = argparse.ArgumentParser(description='Feed syslog messages to InfluxDB')
         parser.add_argument('--config', '-c', default=CONFIG_DEFAULT)
         parser.add_argument('--debug', '-d', action='store_true', default=False)
+        parser.add_argument('--telegraf', '-t', action='store_true', default=False,
+            help="Telegraf mode, run once and exit, store timestamp of last run")
+        parser.add_argument('--verbose', '-v', action='store_true', default=False)
         self.args = parser.parse_args()
+        if self.args.verbose:
+            global VERBOSE
+            VERBOSE = True
 
     def read_config(self):
         log('reading config from: {}', self.args.config)
         with open(self.args.config) as config_fh:
             self.config = yaml.safe_load(config_fh)
+        self.filters = self.config.get("filters", [])
         self.rules = self.config.get('rules', [])
-        if self.config.get('message_format') == 'json':
-            self.message_loader = self.load_message_json
-        elif self.config.get('message_format') == 'legacy':
-            self.message_loader = self.load_message_legacy
 
     def compile_rules(self):
         log('compiling rule regular expressions...')
+        pattern_matches = []
         for rule in self.rules:
             key = rule['match']['key']
             pattern = rule['match']['regex']
-            log("{}: '{}' rexep: {}", rule['name'], key, pattern)
+            log("{}: '{}' regexp: {}", rule['name'], key, pattern)
             rule['match']['regex'] = re.compile(pattern)
         log('done')
 
@@ -128,43 +106,17 @@ class LogFluxApplication(object):
         self.client.create_database(self.database)
         self.client.switch_database(self.database)
 
-    def load_message_json(self, raw):
-        return json.loads(raw.decode('utf-8').strip())
-
-    def load_message_legacy(self, raw):
-        r = {}
-        lines = iter(raw.decode('utf-8').splitlines())
-        for line in lines:
-            if line:
-                k, v = line.split(': ', 1)
-                r[k] = v
-            else:
-                break
-        r['message'] = '\n'.join(lines)
-        return r
-
-    def load_message(self, raw):
-        if not self.message_loader:
-            try:
-                self.load_message_json(raw)
-                self.message_loader = self.load_message_json
-                log('first message appears to be JSON format, setting loader to JSON')
-            except ValueError as exc:
-                log('first message does not appear to be JSON format, setting loader to legacy')
-                self.message_loader = self.load_message_legacy
-        return self.message_loader(raw)
-
     def check_re(self, msg, key, pattern):
         try:
             return re.match(pattern, msg[key].strip())
         except KeyError:
-            self.log("expected key '{}' not in message", key)
+            log("expected key '{}' not in message", key)
 
     def rule_value_match_lookup(self, rule, match, lookup):
         rule_key = rule['match']['key']
         key, matchkey = lookup.split('.', 1)
         if key != rule_key:
-            raise NotImplemented("invalid key, fields/tags using regex lookup cannot be performed on message parts "
+            raise Exception("invalid key, fields/tags using regex lookup cannot be performed on message parts "
                                  "other than the '{}' key: {}".format(rule_key, key))
         return match.groupdict()[matchkey]
 
@@ -182,9 +134,9 @@ class LogFluxApplication(object):
             else:
                 value = msg[lookup]
         except KeyError:
-            self.log("error: invalid field/tag reference: {}; matches were:", lookup)
+            log("error: invalid field/tag reference: {}; matches were:", lookup)
             for k, v in match.groupdict().items():
-                self.log("  {}: {}", k, v)
+                log("  {}: {}", k, v)
         if value and valtypef:
             value = valtypef(value)
         return value
@@ -199,13 +151,13 @@ class LogFluxApplication(object):
 
     def make_point(self, rule, msg, match):
         measurement = rule['name']
-        time = msg['@timestamp']
-        fields = self.get_fields_tags('fields', rule, msg, match, default={'value': 'message'})
+        stamp = msg["__REALTIME_TIMESTAMP"].replace(tzinfo=tzlocal.get_localzone())
+        fields = self.get_fields_tags('fields', rule, msg, match, default={'value': 'MESSAGE'})
         assert fields, "Unable to populate field values"
         tags = self.get_fields_tags('tags', rule, msg, match)
         m = {
             'measurement': measurement,
-            'time': time,
+            'time': int(stamp.timestamp() * 1e9),
             'fields': fields,
         }
         if tags:
@@ -222,7 +174,7 @@ class LogFluxApplication(object):
                 try:
                     points.append(self.make_point(rule, msg, m))
                 except Exception as exc:
-                    self.log('Failed to generate point: {}', str(exc))
+                    log('Failed to generate point: {}', str(exc))
         return points
 
     def send_points(self, points):
@@ -230,51 +182,54 @@ class LogFluxApplication(object):
             tags = ''
             if point.get('tags'):
                 tags = ',' + fmtarg(point.get('tags', {}))
-            self.log('{measurement}{tags} {fields} {timestamp}'.format(
-                measurement=point['measurement'],
-                tags=tags,
-                fields=fmtarg(point['fields']),
-                timestamp=point['time']))
-        if points:
+            if self.args.telegraf or self.args.verbose:
+                print('{measurement}{tags} {fields} {timestamp}'.format(
+                    measurement=point['measurement'],
+                    tags=tags,
+                    fields=fmtarg(point['fields']),
+                    timestamp=point['time']))
+        if points and not self.args.telegraf:
             self.client.write_points(points)
 
-    def handle(self, handler):
-        self.message_id += 1
-        points = []
-        raw = handler.request[0]
-        self.debug('received message: {}', raw)
-        try:
-            msg = self.load_message(raw)
-            if not msg:
-                return
+    def handle_all(self, j):
+        stamp = None
+        while msg := j.get_next():
             points = self.parse_message(msg)
-            self.send_points(points)
-        except Exception:
-            self.log("Caught exception handling message", exception=True)
+            if points:
+                stamp = msg["__REALTIME_TIMESTAMP"].timestamp()
+                self.send_points(points)
+        return stamp
 
-    def serve(self):
-        try:
-            unlink(self.socket)
-        except (IOError, OSError) as exc:
-            if exc.errno != ENOENT:
-                raise
-        log('binding socket {}', self.socket)
-        if self.config.get('server_type'):
-            self.server = SERVER_CLASS_MAP[self.config['server_type']](self.socket, MessageHandler)
+    def run_once(self, j):
+        if os.path.exists(LAST_TIMESTAMP):
+            j.seek_realtime(datetime.datetime.fromtimestamp(float(open(LAST_TIMESTAMP).read())))
+        stamp = self.handle_all(j)
+        if stamp:
+            open(LAST_TIMESTAMP, "w").write(str(stamp + 0.000001))
+
+    def run_continuous(self, j):
+        j.seek_tail()
+        while True:
+            self.handle_all(j)
+            sleep(1)
+
+    def run(self):
+        j = journal.Reader()
+        # add as list of strings to allow for duplicate key ORing as per docs:
+        # https://www.freedesktop.org/software/systemd/python-systemd/journal.html#systemd.journal.Reader.add_match
+        j.add_match(*[f"{f['key']}={f['value']}" for f in self.filters])
+        if self.args.telegraf:
+            self.run_once(j)
         else:
-            self.server = Server(self.socket, MessageHandler)
-        self.server.app = self
-        try:
-            self.server.serve_forever()
-        finally:
-            unlink(self.socket)
+            self.run_continuous(j)
 
 
 def log(msg, *args, **kwargs):
     exception = kwargs.pop('exception', False)
     if exception and sys.exc_info()[0] is not None:
         print(traceback.format_exc(), end='', file=sys.stderr)
-    print(msg.format(*args, **kwargs), file=sys.stderr)
+    if VERBOSE:
+        print(msg.format(*args, **kwargs), file=sys.stderr)
 
 
 def influxarg(v):
@@ -291,10 +246,8 @@ def fmtarg(d):
 
 
 def main():
-    #app = LogFluxApplication()
-    #app.serve()
-    from .journald import main as journald_main
-    journald_main()
+    app = LogFluxApplication()
+    app.run()
 
 
 if __name__ == '__main__':
