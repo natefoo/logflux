@@ -2,16 +2,9 @@
 import argparse
 import datetime
 import os.path
-import json
 import re
 import sys
 import traceback
-from errno import ENOENT
-from os import (
-    getpid,
-    unlink
-)
-from threading import current_thread
 from time import sleep
 from datetime import timezone
 
@@ -22,7 +15,7 @@ from systemd import journal
 
 
 CONFIG_DEFAULT = 'logflux.yaml'
-LAST_TIMESTAMP = '.last_timestamp'
+LAST_TIMESTAMP_FILE = '.last_timestamp'
 DATABASE = 'logflux'
 TYPE_MAP = {
     'int': int,
@@ -44,16 +37,16 @@ class LogFluxApplication(object):
         self.setup()
 
     @property
-    def socket(self):
-        return self.config.get('socket', SOCK)
-
-    @property
     def influx_config(self):
         return self.config.get('influx', {})
 
     @property
     def database(self):
         return self.config.get('database', DATABASE)
+
+    @property
+    def last_timestamp_file(self):
+        return self.config.get("last_timestamp_file", LAST_TIMESTAMP_FILE)
 
     @property
     def client(self):
@@ -201,11 +194,11 @@ class LogFluxApplication(object):
         return stamp
 
     def run_once(self, j):
-        if os.path.exists(LAST_TIMESTAMP):
-            j.seek_realtime(datetime.datetime.fromtimestamp(float(open(LAST_TIMESTAMP).read())))
+        if os.path.exists(self.last_timestamp_file):
+            j.seek_realtime(datetime.datetime.fromtimestamp(float(open(self.last_timestamp_file).read())))
         stamp = self.handle_all(j)
         if stamp:
-            open(LAST_TIMESTAMP, "w").write(str(stamp + 0.000001))
+            open(self.last_timestamp_file, "w").write(str(stamp + 0.000001))
 
     def run_continuous(self, j):
         j.seek_tail()
