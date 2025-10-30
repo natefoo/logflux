@@ -92,6 +92,12 @@ class LogFluxApplication(object):
             pattern = rule['match']['regex']
             log("{}: '{}' regexp: {}", rule['name'], key, pattern)
             rule['match']['regex'] = re.compile(pattern)
+            for key, val in rule.get("tags", {}).items():
+                if isinstance(val, dict) and "transform" in val:
+                    for transform in val["transform"]:
+                        pattern = transform["match"]
+                        log("{}: '{}' regexp: {}", rule['name'], key, pattern)
+                        transform["match"] = re.compile(pattern)
         log('done')
 
     def setup_influx(self):
