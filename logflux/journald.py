@@ -117,9 +117,11 @@ class LogFluxApplication(object):
     def rule_value_lookup(self, rule, msg, match, lookup):
         value = None
         valtypef = None
+        transforms = None
         if isinstance(lookup, dict):
             if 'type' in lookup:
                 valtypef = TYPE_MAP[lookup['type']]
+            transforms = lookup.get("transform")
             lookup = lookup['lookup']
         try:
             if '.' in lookup:
@@ -130,6 +132,9 @@ class LogFluxApplication(object):
             log("error: invalid field/tag reference: {}; matches were:", lookup)
             for k, v in match.groupdict().items():
                 log("  {}: {}", k, v)
+        if value and transforms:
+            for transform in transforms:
+                value = re.sub(transform["match"], transform["sub"], value)
         if value and valtypef:
             value = valtypef(value)
         return value
