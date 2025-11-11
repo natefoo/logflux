@@ -107,7 +107,10 @@ class LogFluxApplication(object):
 
     def check_re(self, msg, key, pattern):
         try:
-            return re.match(pattern, msg[key].strip())
+            val = msg[key]
+            if isinstance(val, bytes):
+                val = val.decode("utf-8", errors="replace")
+            return re.match(pattern, val.strip())
         except KeyError:
             log("expected key '{}' not in message", key)
 
