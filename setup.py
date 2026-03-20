@@ -11,13 +11,13 @@ setup(
     name = 'logflux',
     version = '0.2.2',
     packages = find_packages(),
-    description = '(r)syslog-to-influxdb translator',
-    long_description = 'Read messages from rsyslog via a socket and send regex-parsed values to InfluxDB',
+    description = 'Log-to-InfluxDB translator (rsyslog and journald)',
+    long_description = 'Read messages from rsyslog or journald and send regex-parsed values to InfluxDB',
     url = 'https://github.com/natefoo/logflux',
     author = 'Nate Coraor',
     author_email = 'nate@bx.psu.edu',
     license = 'MIT',
-    keywords = 'syslog rsyslog influx influxdb grafana',
+    keywords = 'syslog rsyslog journald systemd influx influxdb grafana',
     install_requires = requirements,
     entry_points = {
         'console_scripts': [
