@@ -5,10 +5,11 @@ import argparse
 import json
 import re
 import socketserver
+from collections.abc import Callable
 from errno import ENOENT
 from os import getpid, unlink
 from threading import current_thread
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .base import LogFluxApplication, Message, Point, Rule, log
 
@@ -31,12 +32,12 @@ class LogFluxServer(socketserver.UnixDatagramServer):
 
 class ForkingServer(socketserver.ForkingMixIn, LogFluxServer):
     def log(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        log("[pid {}] {}".format(getpid(), msg), *args, **kwargs)
+        log(f"[pid {getpid()}] {msg}", *args, **kwargs)
 
 
 class ThreadingServer(socketserver.ThreadingMixIn, LogFluxServer):
     def log(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        log("[tid {}] {}".format(current_thread().ident, msg), *args, **kwargs)
+        log(f"[tid {current_thread().ident}] {msg}", *args, **kwargs)
 
 
 SERVER_CLASS_MAP: dict[str, type[LogFluxServer]] = {
@@ -47,9 +48,9 @@ SERVER_CLASS_MAP: dict[str, type[LogFluxServer]] = {
 
 class RsyslogApplication(LogFluxApplication):
     def __init__(self, args: argparse.Namespace) -> None:
-        self.server: Optional[LogFluxServer] = None
+        self.server: LogFluxServer | None = None
         self.message_id: int = 0
-        self.message_loader: Optional[Callable[[bytes], Message]] = None
+        self.message_loader: Callable[[bytes], Message] | None = None
         super().__init__(args)
 
     @property
@@ -66,7 +67,7 @@ class RsyslogApplication(LogFluxApplication):
 
     def log_msg(self, msg: str, *args: Any, **kwargs: Any) -> None:
         assert self.server is not None
-        self.server.log("[msg {}]: {}".format(self.message_id, msg), *args, **kwargs)
+        self.server.log(f"[msg {self.message_id}]: {msg}", *args, **kwargs)
 
     def load_message_json(self, raw: bytes) -> Message:
         result: Message = json.loads(raw.decode("utf-8").strip())

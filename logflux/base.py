@@ -5,7 +5,7 @@ import argparse
 import re
 import sys
 import traceback
-from typing import Any, Optional, Union
+from typing import Any
 
 import yaml
 from influxdb import InfluxDBClient
@@ -29,7 +29,7 @@ class LogFluxApplication:
         self.args = args
         self.config: dict[str, Any] = {}
         self.rules: list[Rule] = []
-        self.__client: Optional[InfluxDBClient] = None
+        self.__client: InfluxDBClient | None = None
         self.setup()
 
     @property
@@ -83,7 +83,7 @@ class LogFluxApplication:
         self.client.create_database(self.database)
         self.client.switch_database(self.database)
 
-    def check_re(self, msg: Message, key: str, pattern: re.Pattern[str]) -> Optional[re.Match[str]]:
+    def check_re(self, msg: Message, key: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
         try:
             val = msg[key]
             if isinstance(val, bytes):
@@ -98,17 +98,15 @@ class LogFluxApplication:
         key, matchkey = lookup.split(".", 1)
         if key != rule_key:
             raise Exception(
-                "invalid key, fields/tags using regex lookup cannot be performed on message parts "
-                "other than the '{}' key: {}".format(rule_key, key)
+                f"invalid key, fields/tags using regex lookup cannot be performed on message parts "
+                f"other than the '{rule_key}' key: {key}"
             )
         return match.groupdict()[matchkey]
 
-    def rule_value_lookup(
-        self, rule: Rule, msg: Message, match: re.Match[str], lookup: Union[str, dict[str, Any]]
-    ) -> Any:
+    def rule_value_lookup(self, rule: Rule, msg: Message, match: re.Match[str], lookup: str | dict[str, Any]) -> Any:
         value: Any = None
-        valtypef: Optional[type] = None
-        transforms: Optional[list[dict[str, Any]]] = None
+        valtypef: type | None = None
+        transforms: list[dict[str, Any]] | None = None
         if isinstance(lookup, dict):
             if "type" in lookup:
                 valtypef = TYPE_MAP[lookup["type"]]
@@ -137,7 +135,7 @@ class LogFluxApplication:
         rule: Rule,
         msg: Message,
         match: re.Match[str],
-        default: Optional[dict[str, Any]] = None,
+        default: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         r: dict[str, Any] = {}
         for k, lookup in rule.get(lookup_type, default or {}).items():
@@ -168,14 +166,7 @@ class LogFluxApplication:
             if point.get("tags"):
                 tags = "," + fmtarg(point.get("tags", {}))
             if self.args.verbose:
-                print(
-                    "{measurement}{tags} {fields} {timestamp}".format(
-                        measurement=point["measurement"],
-                        tags=tags,
-                        fields=fmtarg(point["fields"]),
-                        timestamp=point["time"],
-                    )
-                )
+                print(f"{point['measurement']}{tags} {fmtarg(point['fields'])} {point['time']}")
         if points:
             self.client.write_points(points)
 
@@ -191,7 +182,7 @@ def log(msg: str, *args: Any, **kwargs: Any) -> None:
         print(msg.format(*args, **kwargs), file=sys.stderr)
 
 
-def influxarg(v: Union[int, float, str]) -> str:
+def influxarg(v: int | float | str) -> str:
     if isinstance(v, float):
         return str(v)
     elif isinstance(v, int):
@@ -201,4 +192,4 @@ def influxarg(v: Union[int, float, str]) -> str:
 
 
 def fmtarg(d: dict[str, Any]) -> str:
-    return ",".join(["{}={}".format(k, influxarg(v)) for k, v in d.items()])
+    return ",".join([f"{k}={influxarg(v)}" for k, v in d.items()])

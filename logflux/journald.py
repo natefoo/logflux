@@ -5,7 +5,6 @@ import datetime
 import os.path
 import re
 from time import sleep
-from typing import Optional
 
 import tzlocal
 from systemd import journal
@@ -39,14 +38,7 @@ class JournaldApplication(LogFluxApplication):
             if point.get("tags"):
                 tags = "," + fmtarg(point.get("tags", {}))
             if self.args.telegraf or self.args.verbose:
-                print(
-                    "{measurement}{tags} {fields} {timestamp}".format(
-                        measurement=point["measurement"],
-                        tags=tags,
-                        fields=fmtarg(point["fields"]),
-                        timestamp=point["time"],
-                    )
-                )
+                print(f"{point['measurement']}{tags} {fmtarg(point['fields'])} {point['time']}")
         if points and not self.args.telegraf:
             self.client.write_points(points)
 
@@ -65,8 +57,8 @@ class JournaldApplication(LogFluxApplication):
             m["tags"] = tags
         return m
 
-    def handle_all(self, j: journal.Reader) -> Optional[float]:
-        stamp: Optional[float] = None
+    def handle_all(self, j: journal.Reader) -> float | None:
+        stamp: float | None = None
         while msg := j.get_next():
             points = self.parse_message(msg)
             if points:
