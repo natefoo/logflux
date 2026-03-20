@@ -143,9 +143,7 @@ class TestRunOnce:
             }
         ]
         ts_file = str(tmp_path / "last_ts")
-        app = make_journald_app(
-            rules=rules, config_extra={"last_timestamp_file": ts_file}, telegraf=True
-        )
+        app = make_journald_app(rules=rules, config_extra={"last_timestamp_file": ts_file}, telegraf=True)
 
         stamp = datetime.datetime(2024, 6, 15, 10, 30, 0)
         messages = [
@@ -165,9 +163,7 @@ class TestRunOnce:
         with open(ts_file, "w") as f:
             f.write("1718444400.0")
 
-        app = make_journald_app(
-            config_extra={"last_timestamp_file": ts_file}, telegraf=True
-        )
+        app = make_journald_app(config_extra={"last_timestamp_file": ts_file}, telegraf=True)
 
         journal = MagicMock()
         journal.get_next = MagicMock(return_value={})

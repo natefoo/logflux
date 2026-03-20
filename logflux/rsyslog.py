@@ -79,18 +79,14 @@ class RsyslogApplication(LogFluxApplication):
                 self.message_loader = self.load_message_json
                 log("first message appears to be JSON format, setting loader to JSON")
             except ValueError:
-                log(
-                    "first message does not appear to be JSON format, setting loader to legacy"
-                )
+                log("first message does not appear to be JSON format, setting loader to legacy")
                 self.message_loader = self.load_message_legacy
         return self.message_loader(raw)
 
     def make_point(self, rule, msg, match):
         measurement = rule["name"]
         time = msg["@timestamp"]
-        fields = self.get_fields_tags(
-            "fields", rule, msg, match, default={"value": "message"}
-        )
+        fields = self.get_fields_tags("fields", rule, msg, match, default={"value": "message"})
         assert fields, "Unable to populate field values"
         tags = self.get_fields_tags("tags", rule, msg, match)
         m = {
@@ -123,9 +119,7 @@ class RsyslogApplication(LogFluxApplication):
                 raise
         log("binding socket {}", self.socket)
         if self.config.get("server_type"):
-            self.server = SERVER_CLASS_MAP[self.config["server_type"]](
-                self.socket, MessageHandler
-            )
+            self.server = SERVER_CLASS_MAP[self.config["server_type"]](self.socket, MessageHandler)
         else:
             self.server = Server(self.socket, MessageHandler)
         self.server.app = self

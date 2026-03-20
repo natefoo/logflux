@@ -45,9 +45,7 @@ class TestFmtarg:
 
 def make_app(rules=None, config_extra=None, debug=False, verbose=False, telegraf=False):
     """Create a LogFluxApplication subclass instance with setup() bypassed."""
-    args = Namespace(
-        config="dummy.yaml", debug=debug, verbose=verbose, telegraf=telegraf
-    )
+    args = Namespace(config="dummy.yaml", debug=debug, verbose=verbose, telegraf=telegraf)
 
     class TestApp(LogFluxApplication):
         def setup(self):
@@ -56,9 +54,7 @@ def make_app(rules=None, config_extra=None, debug=False, verbose=False, telegraf
             self.config = config_extra or {}
 
         def make_point(self, rule, msg, match):
-            fields = self.get_fields_tags(
-                "fields", rule, msg, match, default={"value": "MESSAGE"}
-            )
+            fields = self.get_fields_tags("fields", rule, msg, match, default={"value": "MESSAGE"})
             tags = self.get_fields_tags("tags", rule, msg, match)
             m = {"measurement": rule["name"], "time": 0, "fields": fields}
             if tags:
@@ -137,9 +133,7 @@ class TestRuleValueLookup:
     def test_type_conversion(self):
         msg = {"MESSAGE": "val=42"}
         match = re.match(self.rule["match"]["regex"], msg["MESSAGE"])
-        result = self.app.rule_value_lookup(
-            self.rule, msg, match, {"lookup": "MESSAGE.val", "type": "int"}
-        )
+        result = self.app.rule_value_lookup(self.rule, msg, match, {"lookup": "MESSAGE.val", "type": "int"})
         assert result == 42
         assert isinstance(result, int)
 
@@ -198,9 +192,7 @@ class TestCompileRules:
             }
         ]
         app.compile_rules()
-        assert isinstance(
-            app.rules[0]["tags"]["host"]["transform"][0]["match"], re.Pattern
-        )
+        assert isinstance(app.rules[0]["tags"]["host"]["transform"][0]["match"], re.Pattern)
 
 
 # -- parse_message / end-to-end point generation ------------------------------

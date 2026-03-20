@@ -21,9 +21,7 @@ def make_rsyslog_app(rules=None, config_extra=None):
 class TestLoadMessageJson:
     def test_valid_json(self):
         app = make_rsyslog_app()
-        raw = json.dumps(
-            {"message": "hello", "@timestamp": "2024-01-01T00:00:00Z"}
-        ).encode("utf-8")
+        raw = json.dumps({"message": "hello", "@timestamp": "2024-01-01T00:00:00Z"}).encode("utf-8")
         result = app.load_message_json(raw)
         assert result["message"] == "hello"
 

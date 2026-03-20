@@ -46,9 +46,7 @@ class JournaldApplication(LogFluxApplication):
     def make_point(self, rule, msg, match):
         measurement = rule["name"]
         stamp = msg["__REALTIME_TIMESTAMP"].replace(tzinfo=tzlocal.get_localzone())
-        fields = self.get_fields_tags(
-            "fields", rule, msg, match, default={"value": "MESSAGE"}
-        )
+        fields = self.get_fields_tags("fields", rule, msg, match, default={"value": "MESSAGE"})
         assert fields, "Unable to populate field values"
         tags = self.get_fields_tags("tags", rule, msg, match)
         m = {
@@ -71,11 +69,7 @@ class JournaldApplication(LogFluxApplication):
 
     def run_once(self, j):
         if os.path.exists(self.last_timestamp_file):
-            j.seek_realtime(
-                datetime.datetime.fromtimestamp(
-                    float(open(self.last_timestamp_file).read())
-                )
-            )
+            j.seek_realtime(datetime.datetime.fromtimestamp(float(open(self.last_timestamp_file).read())))
         stamp = self.handle_all(j)
         if stamp:
             open(self.last_timestamp_file, "w").write(str(stamp + 0.000001))
