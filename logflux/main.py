@@ -1,15 +1,18 @@
 #!/usr/bin/env python
+from __future__ import annotations
+
 import argparse
+from importlib import import_module
 
 from .base import CONFIG_DEFAULT
 
-SOURCE_MAP = {
+SOURCE_MAP: dict[str, str] = {
     "rsyslog": "logflux.rsyslog:RsyslogApplication",
     "journald": "logflux.journald:JournaldApplication",
 }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Feed log messages to InfluxDB")
     parser.add_argument(
         "--source",
@@ -37,8 +40,6 @@ def main():
 
     # Lazy import to avoid requiring systemd on rsyslog-only installs
     module_path, class_name = SOURCE_MAP[args.source].rsplit(":", 1)
-    from importlib import import_module
-
     module = import_module(module_path)
     app_class = getattr(module, class_name)
 
