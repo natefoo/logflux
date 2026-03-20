@@ -6,10 +6,9 @@ from time import sleep
 import tzlocal
 from systemd import journal
 
-from .base import LogFluxApplication, fmtarg, log
+from .base import LogFluxApplication, fmtarg
 
-
-LAST_TIMESTAMP_FILE = '.last_timestamp'
+LAST_TIMESTAMP_FILE = ".last_timestamp"
 
 
 class JournaldApplication(LogFluxApplication):
@@ -29,31 +28,36 @@ class JournaldApplication(LogFluxApplication):
 
     def send_points(self, points):
         for point in points:
-            tags = ''
-            if point.get('tags'):
-                tags = ',' + fmtarg(point.get('tags', {}))
+            tags = ""
+            if point.get("tags"):
+                tags = "," + fmtarg(point.get("tags", {}))
             if self.args.telegraf or self.args.verbose:
-                print('{measurement}{tags} {fields} {timestamp}'.format(
-                    measurement=point['measurement'],
-                    tags=tags,
-                    fields=fmtarg(point['fields']),
-                    timestamp=point['time']))
+                print(
+                    "{measurement}{tags} {fields} {timestamp}".format(
+                        measurement=point["measurement"],
+                        tags=tags,
+                        fields=fmtarg(point["fields"]),
+                        timestamp=point["time"],
+                    )
+                )
         if points and not self.args.telegraf:
             self.client.write_points(points)
 
     def make_point(self, rule, msg, match):
-        measurement = rule['name']
+        measurement = rule["name"]
         stamp = msg["__REALTIME_TIMESTAMP"].replace(tzinfo=tzlocal.get_localzone())
-        fields = self.get_fields_tags('fields', rule, msg, match, default={'value': 'MESSAGE'})
+        fields = self.get_fields_tags(
+            "fields", rule, msg, match, default={"value": "MESSAGE"}
+        )
         assert fields, "Unable to populate field values"
-        tags = self.get_fields_tags('tags', rule, msg, match)
+        tags = self.get_fields_tags("tags", rule, msg, match)
         m = {
-            'measurement': measurement,
-            'time': int(stamp.timestamp() * 1e9),
-            'fields': fields,
+            "measurement": measurement,
+            "time": int(stamp.timestamp() * 1e9),
+            "fields": fields,
         }
         if tags:
-            m['tags'] = tags
+            m["tags"] = tags
         return m
 
     def handle_all(self, j):
@@ -67,7 +71,11 @@ class JournaldApplication(LogFluxApplication):
 
     def run_once(self, j):
         if os.path.exists(self.last_timestamp_file):
-            j.seek_realtime(datetime.datetime.fromtimestamp(float(open(self.last_timestamp_file).read())))
+            j.seek_realtime(
+                datetime.datetime.fromtimestamp(
+                    float(open(self.last_timestamp_file).read())
+                )
+            )
         stamp = self.handle_all(j)
         if stamp:
             open(self.last_timestamp_file, "w").write(str(stamp + 0.000001))
