@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 from setuptools import setup, find_packages
 
 
@@ -24,14 +23,14 @@ setup(
             'logflux = logflux.main:main'
         ]
     },
+    python_requires='>=3.9',
     classifiers = [
         'License :: OSI Approved :: MIT License',
         'Natural Language :: English',
         'Operating System :: POSIX',
         'Programming Language :: Python',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3'
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3 :: Only',
     ],
     zip_safe = True
 )

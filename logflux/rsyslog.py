@@ -1,12 +1,6 @@
 #!/usr/bin/env python
-from __future__ import print_function
-
 import json
-
-try:
-    import socketserver
-except ImportError:
-    import SocketServer as socketserver
+import socketserver
 from errno import ENOENT
 from os import getpid, unlink
 from threading import current_thread
