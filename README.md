@@ -162,10 +162,15 @@ server_type: threading           # "forking", "threading", or omit for single-th
 
 ```yaml
 last_timestamp_file: .last_timestamp   # Timestamp file for telegraf mode
+namespace: mynamespace                  # Journal namespace (requires python-systemd >= 235)
 filters:                                # Journal match filters
   - key: _SYSTEMD_UNIT
     value: nginx.service
 ```
+
+The `namespace` option reads from a specific journald namespace (see `systemd-journald.service(8)`). This requires
+`python-systemd` version 235 or newer. If `namespace` is set but the installed `python-systemd` does not support it,
+logflux will exit with an error at startup. Omit the option to read from the default namespace.
 
 ### Common options
 

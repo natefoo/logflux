@@ -9,13 +9,22 @@ from time import sleep
 import tzlocal
 from systemd import journal
 
-from .base import LogFluxApplication, Message, Point, Rule, fmtarg
+from .base import LogFluxApplication, Message, Point, Rule, fmtarg, log
 
 LAST_TIMESTAMP_FILE = ".last_timestamp"
 
 
+def _reader_supports_namespace() -> bool:
+    """Check if systemd.journal.Reader supports the namespace parameter (python-systemd >= 235)."""
+    import inspect
+
+    sig = inspect.signature(journal.Reader.__init__)
+    return "namespace" in sig.parameters
+
+
 class JournaldApplication(LogFluxApplication):
     filters: list[dict[str, str]]
+    namespace: str | None
 
     @property
     def last_timestamp_file(self) -> str:
@@ -31,6 +40,7 @@ class JournaldApplication(LogFluxApplication):
     def read_config(self) -> None:
         super().read_config()
         self.filters = self.config.get("filters", [])
+        self.namespace = self.config.get("namespace")
 
     def send_points(self, points: list[Point]) -> None:
         for point in points:
@@ -79,8 +89,19 @@ class JournaldApplication(LogFluxApplication):
             self.handle_all(j)
             sleep(1)
 
+    def _open_reader(self) -> journal.Reader:
+        if self.namespace:
+            if not _reader_supports_namespace():
+                raise RuntimeError(
+                    f"namespace '{self.namespace}' configured but python-systemd does not support "
+                    f"the namespace parameter (requires python-systemd >= 235)"
+                )
+            log("opening journal reader for namespace: {}", self.namespace)
+            return journal.Reader(namespace=self.namespace)
+        return journal.Reader()
+
     def run(self) -> None:
-        j = journal.Reader()
+        j = self._open_reader()
         # add as list of strings to allow for duplicate key ORing as per docs:
         # https://www.freedesktop.org/software/systemd/python-systemd/journal.html#systemd.journal.Reader.add_match
         j.add_match(*[f"{f['key']}={f['value']}" for f in self.filters])

@@ -3,13 +3,13 @@ import os
 import re
 import sys
 from argparse import Namespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Mock the systemd module before importing journald
 sys.modules["systemd"] = MagicMock()
 sys.modules["systemd.journal"] = MagicMock()
 
-from logflux.journald import LAST_TIMESTAMP_FILE, JournaldApplication  # noqa: E402
+from logflux.journald import LAST_TIMESTAMP_FILE, JournaldApplication, _reader_supports_namespace  # noqa: E402
 
 
 def make_journald_app(rules=None, config_extra=None, telegraf=False):
@@ -21,6 +21,7 @@ def make_journald_app(rules=None, config_extra=None, telegraf=False):
             self.rules = rules or []
             self.config = config_extra or {}
             self.filters = self.config.get("filters", [])
+            self.namespace = self.config.get("namespace")
 
     return TestJournaldApp(args)
 
@@ -183,3 +184,36 @@ class TestFilters:
         app = make_journald_app(config_extra=config)
         assert len(app.filters) == 2
         assert app.filters[0]["key"] == "_SYSTEMD_UNIT"
+
+
+class TestNamespace:
+    def test_namespace_from_config(self):
+        app = make_journald_app(config_extra={"namespace": "myns"})
+        assert app.namespace == "myns"
+
+    def test_namespace_default_none(self):
+        app = make_journald_app()
+        assert app.namespace is None
+
+    @patch("logflux.journald._reader_supports_namespace", return_value=True)
+    @patch("logflux.journald.journal.Reader")
+    def test_open_reader_with_namespace(self, mock_reader, mock_supports):
+        app = make_journald_app(config_extra={"namespace": "myns"})
+        app._open_reader()
+        mock_reader.assert_called_once_with(namespace="myns")
+
+    @patch("logflux.journald._reader_supports_namespace", return_value=False)
+    def test_open_reader_namespace_unsupported_raises(self, mock_supports):
+        app = make_journald_app(config_extra={"namespace": "myns"})
+        try:
+            app._open_reader()
+            assert False, "Expected RuntimeError"
+        except RuntimeError as e:
+            assert "python-systemd" in str(e)
+            assert "myns" in str(e)
+
+    @patch("logflux.journald.journal.Reader")
+    def test_open_reader_without_namespace(self, mock_reader):
+        app = make_journald_app()
+        app._open_reader()
+        mock_reader.assert_called_once_with()
