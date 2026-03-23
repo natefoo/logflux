@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 sys.modules["systemd"] = MagicMock()
 sys.modules["systemd.journal"] = MagicMock()
 
-from logflux.journald import LAST_TIMESTAMP_FILE, JournaldApplication, _reader_supports_namespace  # noqa: E402
+from logflux.journald import (  # noqa: E402
+    LAST_TIMESTAMP_FILE,
+    JournaldApplication,
+    _namespace_journal_path,
+    _reader_supports_namespace,
+)
 
 
 def make_journald_app(rules=None, config_extra=None, telegraf=False):
@@ -203,17 +208,40 @@ class TestNamespace:
         mock_reader.assert_called_once_with(namespace="myns")
 
     @patch("logflux.journald._reader_supports_namespace", return_value=False)
-    def test_open_reader_namespace_unsupported_raises(self, mock_supports):
+    @patch("logflux.journald._namespace_journal_path", return_value="/var/log/journal/abc123.myns")
+    @patch("logflux.journald.journal.Reader")
+    def test_open_reader_namespace_fallback_to_path(self, mock_reader, mock_path, mock_supports):
         app = make_journald_app(config_extra={"namespace": "myns"})
-        try:
-            app._open_reader()
-            assert False, "Expected RuntimeError"
-        except RuntimeError as e:
-            assert "python-systemd" in str(e)
-            assert "myns" in str(e)
+        app._open_reader()
+        mock_path.assert_called_once_with("myns")
+        mock_reader.assert_called_once_with(path="/var/log/journal/abc123.myns")
 
     @patch("logflux.journald.journal.Reader")
     def test_open_reader_without_namespace(self, mock_reader):
         app = make_journald_app()
         app._open_reader()
         mock_reader.assert_called_once_with()
+
+
+class TestNamespaceJournalPath:
+    def test_finds_namespace_dir(self, tmp_path):
+        ns_dir = tmp_path / "abc123.myns"
+        ns_dir.mkdir()
+        with patch("logflux.journald.glob.glob", return_value=[str(ns_dir)]):
+            assert _namespace_journal_path("myns") == str(ns_dir)
+
+    def test_no_match_raises(self):
+        with patch("logflux.journald.glob.glob", return_value=[]):
+            try:
+                _namespace_journal_path("myns")
+                assert False, "Expected RuntimeError"
+            except RuntimeError as e:
+                assert "no journal directory found" in str(e)
+
+    def test_multiple_matches_raises(self):
+        with patch("logflux.journald.glob.glob", return_value=["/a/x.myns", "/a/y.myns"]):
+            try:
+                _namespace_journal_path("myns")
+                assert False, "Expected RuntimeError"
+            except RuntimeError as e:
+                assert "multiple journal directories" in str(e)

@@ -168,9 +168,10 @@ filters:                                # Journal match filters
     value: nginx.service
 ```
 
-The `namespace` option reads from a specific journald namespace (see `systemd-journald.service(8)`). This requires
-`python-systemd` version 235 or newer. If `namespace` is set but the installed `python-systemd` does not support it,
-logflux will exit with an error at startup. Omit the option to read from the default namespace.
+The `namespace` option reads from a specific journald namespace (see `systemd-journald.service(8)`). With
+`python-systemd` version 235 or newer, the native `namespace` parameter is used. On older versions, logflux falls back
+to opening the namespace journal directory directly via `path=` (journals are stored at
+`/var/log/journal/<machine-id>.<namespace>/`). Omit the option to read from the default namespace.
 
 ### Common options
 

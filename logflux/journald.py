@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import glob
 import os.path
 import re
 from time import sleep
@@ -20,6 +21,24 @@ def _reader_supports_namespace() -> bool:
 
     sig = inspect.signature(journal.Reader.__init__)
     return "namespace" in sig.parameters
+
+
+def _namespace_journal_path(namespace: str) -> str:
+    """Find the journal directory for a namespace, for use with Reader(path=...).
+
+    Namespace journals are stored at /var/log/journal/<machine-id>.<namespace>/.
+    """
+    pattern = f"/var/log/journal/*.{namespace}"
+    matches = glob.glob(pattern)
+    if not matches:
+        raise RuntimeError(
+            f"no journal directory found for namespace '{namespace}' (expected {pattern})"
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"multiple journal directories found for namespace '{namespace}': {matches}"
+        )
+    return matches[0]
 
 
 class JournaldApplication(LogFluxApplication):
@@ -91,13 +110,15 @@ class JournaldApplication(LogFluxApplication):
 
     def _open_reader(self) -> journal.Reader:
         if self.namespace:
-            if not _reader_supports_namespace():
-                raise RuntimeError(
-                    f"namespace '{self.namespace}' configured but python-systemd does not support "
-                    f"the namespace parameter (requires python-systemd >= 235)"
-                )
-            log("opening journal reader for namespace: {}", self.namespace)
-            return journal.Reader(namespace=self.namespace)
+            if _reader_supports_namespace():
+                log("opening journal reader for namespace: {}", self.namespace)
+                return journal.Reader(namespace=self.namespace)
+            path = _namespace_journal_path(self.namespace)
+            log(
+                "python-systemd does not support namespace parameter, falling back to path: {}",
+                path,
+            )
+            return journal.Reader(path=path)
         return journal.Reader()
 
     def run(self) -> None:
