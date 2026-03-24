@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import math
+import operator
 import re
 import sys
 import traceback
@@ -17,6 +20,56 @@ TYPE_MAP: dict[str, type] = {
     "float": float,
 }
 VERBOSE = False
+
+# Safe operators for math expression evaluation
+_SAFE_OPS: dict[type, Any] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+}
+
+# Allowed math module functions
+_SAFE_MATH: dict[str, Any] = {
+    name: getattr(math, name)
+    for name in ("ceil", "floor", "log", "log2", "log10", "sqrt", "abs", "pow")
+    if hasattr(math, name)
+}
+_SAFE_MATH["abs"] = abs
+
+
+def safe_eval_math(expr: str, variables: dict[str, float | int]) -> float | int:
+    """Evaluate a math expression with variables, without using eval().
+
+    Supports: +, -, *, /, //, %, ** operators and math functions
+    (ceil, floor, log, log2, log10, sqrt, abs, pow).
+    """
+    tree = ast.parse(expr, mode="eval")
+
+    def _eval(node: ast.expr) -> float | int:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        elif isinstance(node, ast.Name) and node.id in variables:
+            return variables[node.id]
+        elif isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
+            return _SAFE_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        elif isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPS:
+            return _SAFE_OPS[type(node.op)](_eval(node.operand))
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in _SAFE_MATH:
+                args = [_eval(arg) for arg in node.args]
+                return _SAFE_MATH[node.func.id](*args)
+            raise ValueError(f"unsupported function: {ast.dump(node.func)}")
+        raise ValueError(f"unsupported expression: {ast.dump(node)}")
+
+    return _eval(tree)
+
 
 # Type aliases for the loosely-typed config/message dicts
 Rule = dict[str, Any]
@@ -70,12 +123,13 @@ class LogFluxApplication:
             pattern = rule["match"]["regex"]
             log("{}: '{}' regexp: {}", rule["name"], key, pattern)
             rule["match"]["regex"] = re.compile(pattern)
-            for key, val in rule.get("tags", {}).items():
-                if isinstance(val, dict) and "transform" in val:
-                    for transform in val["transform"]:
-                        pattern = transform["match"]
-                        log("{}: '{}' regexp: {}", rule["name"], key, pattern)
-                        transform["match"] = re.compile(pattern)
+            for lookup_type in ("fields", "tags"):
+                for key, val in rule.get(lookup_type, {}).items():
+                    if isinstance(val, dict) and "transform" in val:
+                        for transform in val["transform"]:
+                            pattern = transform["match"]
+                            log("{}: '{}' regexp: {}", rule["name"], key, pattern)
+                            transform["match"] = re.compile(pattern)
         log("done")
 
     def setup_influx(self) -> None:
@@ -122,10 +176,10 @@ class LogFluxApplication:
             log("error: invalid field/tag reference: {}; matches were:", lookup)
             for k, v in match.groupdict().items():
                 log("  {}: {}", k, v)
-        if value and transforms:
+        if value is not None and transforms:
             for transform in transforms:
                 value = re.sub(transform["match"], transform["sub"], value)
-        if value and valtypef:
+        if value is not None and valtypef:
             value = valtypef(value)
         return value
 
@@ -139,10 +193,38 @@ class LogFluxApplication:
     ) -> dict[str, Any]:
         r: dict[str, Any] = {}
         for k, lookup in rule.get(lookup_type, default or {}).items():
-            v = self.rule_value_lookup(rule, msg, match, lookup)
-            if v:
+            if isinstance(lookup, dict) and "math" in lookup:
+                v = self.eval_math_field(rule, msg, match, lookup)
+            else:
+                v = self.rule_value_lookup(rule, msg, match, lookup)
+            if v is not None:
                 r[k] = v
         return r
+
+    def eval_math_field(
+        self, rule: Rule, msg: Message, match: re.Match[str], field_def: dict[str, Any]
+    ) -> float | int | None:
+        """Evaluate a math expression field with multiple variable lookups."""
+        variables: dict[str, float | int] = {}
+        for var_name, var_lookup in field_def.get("vars", {}).items():
+            val = self.rule_value_lookup(rule, msg, match, var_lookup)
+            if val is None:
+                log("math field: variable '{}' resolved to None, skipping", var_name)
+                return None
+            try:
+                variables[var_name] = float(val)
+            except (ValueError, TypeError):
+                log("math field: variable '{}' value '{}' is not numeric", var_name, val)
+                return None
+        try:
+            result = safe_eval_math(field_def["math"], variables)
+        except Exception as exc:
+            log("math field: expression '{}' failed: {}", field_def["math"], exc)
+            return None
+        valtypef = TYPE_MAP.get(field_def.get("type", ""), None)
+        if valtypef:
+            result = valtypef(result)
+        return result
 
     def make_point(self, rule: Rule, msg: Message, match: re.Match[str]) -> Point:
         raise NotImplementedError

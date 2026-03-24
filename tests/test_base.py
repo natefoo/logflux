@@ -8,6 +8,7 @@ from logflux.base import (
     LogFluxApplication,
     fmtarg,
     influxarg,
+    safe_eval_math,
 )
 
 # -- Utility functions --------------------------------------------------------
@@ -177,7 +178,7 @@ class TestCompileRules:
         app.compile_rules()
         assert isinstance(app.rules[0]["match"]["regex"], re.Pattern)
 
-    def test_compiles_transforms(self):
+    def test_compiles_tag_transforms(self):
         app = make_app()
         app.rules = [
             {
@@ -193,6 +194,23 @@ class TestCompileRules:
         ]
         app.compile_rules()
         assert isinstance(app.rules[0]["tags"]["host"]["transform"][0]["match"], re.Pattern)
+
+    def test_compiles_field_transforms(self):
+        app = make_app()
+        app.rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": r".*"},
+                "fields": {
+                    "path": {
+                        "lookup": "MESSAGE",
+                        "transform": [{"match": r"\?.*", "sub": ""}],
+                    },
+                },
+            }
+        ]
+        app.compile_rules()
+        assert isinstance(app.rules[0]["fields"]["path"]["transform"][0]["match"], re.Pattern)
 
 
 # -- parse_message / end-to-end point generation ------------------------------
@@ -265,3 +283,204 @@ class TestSendPoints:
         captured = capsys.readouterr()
         assert "test" in captured.out
         assert "value=1i" in captured.out
+
+
+# -- safe_eval_math -----------------------------------------------------------
+
+
+class TestSafeEvalMath:
+    def test_basic_arithmetic(self):
+        assert safe_eval_math("a + b", {"a": 1, "b": 2}) == 3
+        assert safe_eval_math("a - b", {"a": 10, "b": 3}) == 7
+        assert safe_eval_math("a * b", {"a": 4, "b": 5}) == 20
+        assert safe_eval_math("a / b", {"a": 10, "b": 4}) == 2.5
+
+    def test_floor_division_and_modulo(self):
+        assert safe_eval_math("a // b", {"a": 10, "b": 3}) == 3
+        assert safe_eval_math("a % b", {"a": 10, "b": 3}) == 1
+
+    def test_power(self):
+        assert safe_eval_math("a ** b", {"a": 2, "b": 10}) == 1024
+
+    def test_unary_negation(self):
+        assert safe_eval_math("-a", {"a": 5}) == -5
+
+    def test_constants(self):
+        assert safe_eval_math("a + 1", {"a": 5}) == 6
+        assert safe_eval_math("a * 2.5", {"a": 4}) == 10.0
+
+    def test_math_functions(self):
+        assert safe_eval_math("sqrt(a)", {"a": 16}) == 4.0
+        assert safe_eval_math("log10(a)", {"a": 100}) == 2.0
+        assert safe_eval_math("ceil(a)", {"a": 1.2}) == 2
+        assert safe_eval_math("floor(a)", {"a": 1.8}) == 1
+        assert safe_eval_math("abs(a)", {"a": -5}) == 5
+
+    def test_complex_expression(self):
+        result = safe_eval_math("(a + b) / c", {"a": 10, "b": 20, "c": 5})
+        assert result == 6.0
+
+    def test_rejects_builtins(self):
+        with pytest.raises(ValueError, match="unsupported"):
+            safe_eval_math("__import__('os')", {})
+
+    def test_rejects_unknown_function(self):
+        with pytest.raises(ValueError, match="unsupported function"):
+            safe_eval_math("open('foo')", {})
+
+    def test_rejects_unknown_variable(self):
+        with pytest.raises(ValueError, match="unsupported"):
+            safe_eval_math("x + 1", {})
+
+
+# -- Math fields --------------------------------------------------------------
+
+
+class TestMathFields:
+    def test_basic_math_field(self):
+        rules = [
+            {
+                "name": "rate",
+                "match": {
+                    "key": "MESSAGE",
+                    "regex": re.compile(r"bytes=(?P<bytes>\d+) seconds=(?P<seconds>\d+)"),
+                },
+                "fields": {
+                    "rate": {
+                        "math": "bytes / seconds",
+                        "vars": {
+                            "bytes": {"lookup": "MESSAGE.bytes", "type": "float"},
+                            "seconds": {"lookup": "MESSAGE.seconds", "type": "float"},
+                        },
+                    },
+                },
+            }
+        ]
+        app = make_app(rules=rules)
+        msg = {"MESSAGE": "bytes=1000 seconds=5"}
+        points = app.parse_message(msg)
+        assert len(points) == 1
+        assert points[0]["fields"]["rate"] == 200.0
+
+    def test_math_field_with_type(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {
+                    "key": "MESSAGE",
+                    "regex": re.compile(r"a=(?P<a>\d+) b=(?P<b>\d+)"),
+                },
+                "fields": {
+                    "result": {
+                        "math": "a + b",
+                        "vars": {
+                            "a": {"lookup": "MESSAGE.a", "type": "int"},
+                            "b": {"lookup": "MESSAGE.b", "type": "int"},
+                        },
+                        "type": "int",
+                    },
+                },
+            }
+        ]
+        app = make_app(rules=rules)
+        msg = {"MESSAGE": "a=3 b=7"}
+        points = app.parse_message(msg)
+        assert points[0]["fields"]["result"] == 10
+        assert isinstance(points[0]["fields"]["result"], int)
+
+    def test_math_field_with_math_function(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {
+                    "key": "MESSAGE",
+                    "regex": re.compile(r"val=(?P<val>\d+)"),
+                },
+                "fields": {
+                    "log_val": {
+                        "math": "log10(val)",
+                        "vars": {
+                            "val": {"lookup": "MESSAGE.val", "type": "float"},
+                        },
+                    },
+                },
+            }
+        ]
+        app = make_app(rules=rules)
+        msg = {"MESSAGE": "val=1000"}
+        points = app.parse_message(msg)
+        assert points[0]["fields"]["log_val"] == pytest.approx(3.0)
+
+    def test_math_field_missing_var_returns_none(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {
+                    "key": "MESSAGE",
+                    "regex": re.compile(r"a=(?P<a>\d+)"),
+                },
+                "fields": {
+                    "result": {
+                        "math": "a + b",
+                        "vars": {
+                            "a": "MESSAGE.a",
+                            "b": "MESSAGE.b",  # b not captured
+                        },
+                    },
+                },
+            }
+        ]
+        app = make_app(rules=rules)
+        msg = {"MESSAGE": "a=5"}
+        match = re.match(rules[0]["match"]["regex"], msg["MESSAGE"])
+        result = app.eval_math_field(rules[0], msg, match, rules[0]["fields"]["result"])
+        assert result is None
+
+    def test_math_field_mixed_with_regular_fields(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {
+                    "key": "MESSAGE",
+                    "regex": re.compile(r"a=(?P<a>\d+) b=(?P<b>\d+)"),
+                },
+                "fields": {
+                    "sum": {
+                        "math": "a + b",
+                        "vars": {
+                            "a": {"lookup": "MESSAGE.a", "type": "float"},
+                            "b": {"lookup": "MESSAGE.b", "type": "float"},
+                        },
+                    },
+                    "raw_a": {"lookup": "MESSAGE.a", "type": "int"},
+                },
+            }
+        ]
+        app = make_app(rules=rules)
+        msg = {"MESSAGE": "a=3 b=7"}
+        points = app.parse_message(msg)
+        assert points[0]["fields"]["sum"] == 10.0
+        assert points[0]["fields"]["raw_a"] == 3
+
+    def test_math_field_with_constant(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {
+                    "key": "MESSAGE",
+                    "regex": re.compile(r"bytes=(?P<bytes>\d+)"),
+                },
+                "fields": {
+                    "kb": {
+                        "math": "bytes / 1024",
+                        "vars": {
+                            "bytes": {"lookup": "MESSAGE.bytes", "type": "float"},
+                        },
+                    },
+                },
+            }
+        ]
+        app = make_app(rules=rules)
+        msg = {"MESSAGE": "bytes=2048"}
+        points = app.parse_message(msg)
+        assert points[0]["fields"]["kb"] == 2.0

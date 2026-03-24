@@ -251,5 +251,34 @@ tags:
 This replaces long hex IDs in URL paths with `ID` (e.g. `/api/datasets/abcdef1234567890` becomes `/api/datasets/ID`)
 and strips query strings, reducing cardinality for InfluxDB tags while preserving meaningful path structure.
 
+#### Computed fields (math)
+
+Fields can compute a value from multiple captured groups using a math expression. Instead of `lookup`, specify a `math`
+expression and a `vars` map that defines the variables used in the expression:
+
+```yaml
+fields:
+  rate:
+    math: "bytes / seconds"
+    vars:
+      bytes:
+        lookup: MESSAGE.bytes
+        type: float
+      seconds:
+        lookup: MESSAGE.seconds
+        type: float
+```
+
+Each variable in `vars` is resolved using the same lookup syntax as regular fields (including `type` conversion). The
+math expression is then evaluated with those variables. The result can optionally be type-converted with `type` on the
+field itself.
+
+Expressions support standard arithmetic operators (`+`, `-`, `*`, `/`, `//`, `%`, `**`) and a subset of Python `math`
+functions: `ceil`, `floor`, `log`, `log2`, `log10`, `sqrt`, `abs`, `pow`. Constants can be used directly in the
+expression (e.g. `bytes / 1024`).
+
+If any variable resolves to `None` (e.g. a capture group that didn't match) or is non-numeric, the entire field is
+skipped.
+
 If no fields are specified, the default field is `{value: message}` for rsyslog and `{value: MESSAGE}` for journald,
 which stores the full message body.
