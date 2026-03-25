@@ -8,7 +8,7 @@ import socketserver
 from collections.abc import Callable
 from errno import ENOENT
 from os import getpid, unlink
-from threading import current_thread
+from threading import Lock, current_thread
 from typing import Any
 
 from .base import LogFluxApplication, Message, Point, Rule, log
@@ -51,6 +51,7 @@ class RsyslogApplication(LogFluxApplication):
         self.server: LogFluxServer | None = None
         self.message_id: int = 0
         self.message_loader: Callable[[bytes], Message] | None = None
+        self._lock = Lock()
         super().__init__(args)
 
     @property
@@ -78,6 +79,9 @@ class RsyslogApplication(LogFluxApplication):
         lines = iter(raw.decode("utf-8").splitlines())
         for line in lines:
             if line:
+                if ": " not in line:
+                    log("malformed legacy header line, skipping: {}", line)
+                    continue
                 k, v = line.split(": ", 1)
                 r[k] = v
             else:
@@ -87,13 +91,17 @@ class RsyslogApplication(LogFluxApplication):
 
     def load_message(self, raw: bytes) -> Message:
         if not self.message_loader:
-            try:
-                self.load_message_json(raw)
-                self.message_loader = self.load_message_json
-                log("first message appears to be JSON format, setting loader to JSON")
-            except ValueError:
-                log("first message does not appear to be JSON format, setting loader to legacy")
-                self.message_loader = self.load_message_legacy
+            with self._lock:
+                if not self.message_loader:
+                    try:
+                        result = self.load_message_json(raw)
+                        self.message_loader = self.load_message_json
+                        log("first message appears to be JSON format, setting loader to JSON")
+                        return result
+                    except ValueError:
+                        log("first message does not appear to be JSON format, setting loader to legacy")
+                        self.message_loader = self.load_message_legacy
+                        return self.message_loader(raw)
         return self.message_loader(raw)
 
     def make_point(self, rule: Rule, msg: Message, match: re.Match[str]) -> Point:
@@ -112,7 +120,8 @@ class RsyslogApplication(LogFluxApplication):
         return m
 
     def handle(self, handler: MessageHandler) -> None:
-        self.message_id += 1
+        with self._lock:
+            self.message_id += 1
         raw = handler.request[0]
         self.debug("received message: {}", raw)
         try:

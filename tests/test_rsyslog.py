@@ -48,6 +48,23 @@ class TestLoadMessageLegacy:
         assert result["message"] == "line1\nline2"
 
 
+class TestLoadMessageLegacyMalformed:
+    def test_skips_malformed_header_line(self):
+        app = make_rsyslog_app()
+        raw = b"host: web1\nBAD LINE\nprogram: sshd\n\nmessage body"
+        result = app.load_message_legacy(raw)
+        assert result["host"] == "web1"
+        assert result["program"] == "sshd"
+        assert result["message"] == "message body"
+
+    def test_all_malformed_headers(self):
+        app = make_rsyslog_app()
+        raw = b"no-separator\n\nmessage body"
+        result = app.load_message_legacy(raw)
+        assert result["message"] == "message body"
+        assert len(result) == 1
+
+
 class TestLoadMessageAutoDetect:
     def test_autodetects_json(self):
         app = make_rsyslog_app()
@@ -62,6 +79,23 @@ class TestLoadMessageAutoDetect:
         result = app.load_message(raw)
         assert result["host"] == "web1"
         assert app.message_loader == app.load_message_legacy
+
+    def test_autodetect_json_parses_once(self):
+        app = make_rsyslog_app()
+        raw = json.dumps({"message": "test"}).encode("utf-8")
+        # Wrap load_message_json to count calls
+        call_count = 0
+        original = app.load_message_json
+
+        def counting_loader(r):
+            nonlocal call_count
+            call_count += 1
+            return original(r)
+
+        app.load_message_json = counting_loader
+        result = app.load_message(raw)
+        assert result["message"] == "test"
+        assert call_count == 1
 
     def test_explicit_json_config(self):
         app = make_rsyslog_app(config_extra={"message_format": "json"})
