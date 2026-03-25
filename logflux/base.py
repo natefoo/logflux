@@ -50,7 +50,7 @@ def safe_eval_math(expr: str, variables: dict[str, float | int]) -> float | int:
     """
     tree = ast.parse(expr, mode="eval")
 
-    def _eval(node: ast.expr) -> float | int:
+    def _eval(node: ast.AST) -> float | int:
         if isinstance(node, ast.Expression):
             return _eval(node.body)
         elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
@@ -58,13 +58,16 @@ def safe_eval_math(expr: str, variables: dict[str, float | int]) -> float | int:
         elif isinstance(node, ast.Name) and node.id in variables:
             return variables[node.id]
         elif isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
-            return _SAFE_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+            result: float | int = _SAFE_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+            return result
         elif isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPS:
-            return _SAFE_OPS[type(node.op)](_eval(node.operand))
+            result = _SAFE_OPS[type(node.op)](_eval(node.operand))
+            return result
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in _SAFE_MATH:
                 args = [_eval(arg) for arg in node.args]
-                return _SAFE_MATH[node.func.id](*args)
+                result = _SAFE_MATH[node.func.id](*args)
+                return result
             raise ValueError(f"unsupported function: {ast.dump(node.func)}")
         raise ValueError(f"unsupported expression: {ast.dump(node)}")
 

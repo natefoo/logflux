@@ -31,13 +31,9 @@ def _namespace_journal_path(namespace: str) -> str:
     pattern = f"/var/log/journal/*.{namespace}"
     matches = glob.glob(pattern)
     if not matches:
-        raise RuntimeError(
-            f"no journal directory found for namespace '{namespace}' (expected {pattern})"
-        )
+        raise RuntimeError(f"no journal directory found for namespace '{namespace}' (expected {pattern})")
     if len(matches) > 1:
-        raise RuntimeError(
-            f"multiple journal directories found for namespace '{namespace}': {matches}"
-        )
+        raise RuntimeError(f"multiple journal directories found for namespace '{namespace}': {matches}")
     return matches[0]
 
 

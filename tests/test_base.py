@@ -8,8 +8,8 @@ from logflux.base import (
     LogFluxApplication,
     fmtfields,
     fmttags,
-    influx_tag_value,
     influx_field_value,
+    influx_tag_value,
     safe_eval_math,
 )
 

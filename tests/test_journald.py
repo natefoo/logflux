@@ -13,7 +13,6 @@ from logflux.journald import (  # noqa: E402
     LAST_TIMESTAMP_FILE,
     JournaldApplication,
     _namespace_journal_path,
-    _reader_supports_namespace,
 )
 
 
