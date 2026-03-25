@@ -1,0 +1,338 @@
+import datetime
+import os
+import re
+import sys
+from argparse import Namespace
+from unittest.mock import MagicMock, patch
+
+# Mock the systemd module before importing journald
+sys.modules["systemd"] = MagicMock()
+sys.modules["systemd.journal"] = MagicMock()
+
+from logflux.journald import (  # noqa: E402
+    LAST_TIMESTAMP_FILE,
+    JournaldApplication,
+    _namespace_journal_path,
+)
+
+
+def make_journald_app(rules=None, config_extra=None, telegraf=False):
+    """Create a JournaldApplication with setup() bypassed."""
+    args = Namespace(config="dummy.yaml", debug=False, verbose=False, telegraf=telegraf)
+
+    class TestJournaldApp(JournaldApplication):
+        def setup(self):
+            self.rules = rules or []
+            self.config = config_extra or {}
+            self.filters = self.config.get("filters", [])
+            self.namespace = self.config.get("namespace")
+
+    return TestJournaldApp(args)
+
+
+class TestMakePoint:
+    def test_basic_point(self):
+        rules = [
+            {
+                "name": "test_metric",
+                "match": {"key": "MESSAGE", "regex": re.compile(r".*")},
+            }
+        ]
+        app = make_journald_app(rules=rules)
+        stamp = datetime.datetime(2024, 1, 1, 12, 0, 0)
+        msg = {"MESSAGE": "hello world", "__REALTIME_TIMESTAMP": stamp}
+        match = re.match(rules[0]["match"]["regex"], msg["MESSAGE"])
+        point = app.make_point(rules[0], msg, match)
+        assert point["measurement"] == "test_metric"
+        assert point["fields"]["value"] == "hello world"
+        assert isinstance(point["time"], int)
+
+    def test_with_custom_fields(self):
+        rules = [
+            {
+                "name": "test_metric",
+                "match": {"key": "MESSAGE", "regex": re.compile(r"temp=(?P<temp>\d+)")},
+                "fields": {"temp": {"lookup": "MESSAGE.temp", "type": "float"}},
+            }
+        ]
+        app = make_journald_app(rules=rules)
+        stamp = datetime.datetime(2024, 1, 1, 12, 0, 0)
+        msg = {"MESSAGE": "temp=72", "__REALTIME_TIMESTAMP": stamp}
+        match = re.match(rules[0]["match"]["regex"], msg["MESSAGE"])
+        point = app.make_point(rules[0], msg, match)
+        assert point["fields"]["temp"] == 72.0
+
+
+class TestLastTimestampFile:
+    def test_default(self):
+        app = make_journald_app()
+        assert app.last_timestamp_file == LAST_TIMESTAMP_FILE
+
+    def test_from_config(self):
+        app = make_journald_app(config_extra={"last_timestamp_file": "/tmp/custom_ts"})
+        assert app.last_timestamp_file == "/tmp/custom_ts"
+
+
+class TestHandleAll:
+    def test_processes_messages(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": re.compile(r"ok")},
+            }
+        ]
+        app = make_journald_app(rules=rules)
+        app._LogFluxApplication__client = MagicMock()
+
+        stamp = datetime.datetime(2024, 6, 15, 10, 30, 0)
+        messages = [
+            {"MESSAGE": "ok", "__REALTIME_TIMESTAMP": stamp},
+            {},  # empty dict = end of journal
+        ]
+        journal = MagicMock()
+        journal.get_next = MagicMock(side_effect=messages)
+
+        result = app.handle_all(journal)
+        assert result is not None
+        app._LogFluxApplication__client.write_points.assert_called_once()
+
+    def test_no_matching_messages_still_tracks_timestamp(self):
+        rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": re.compile(r"NEVER")},
+            }
+        ]
+        app = make_journald_app(rules=rules)
+        app._LogFluxApplication__client = MagicMock()
+
+        stamp = datetime.datetime(2024, 6, 15, 10, 30, 0)
+        messages = [
+            {"MESSAGE": "something else", "__REALTIME_TIMESTAMP": stamp},
+            {},
+        ]
+        journal = MagicMock()
+        journal.get_next = MagicMock(side_effect=messages)
+
+        result = app.handle_all(journal)
+        assert result == stamp.timestamp()
+        app._LogFluxApplication__client.write_points.assert_not_called()
+
+
+class TestSendPointsTelegraf:
+    def test_telegraf_prints_but_does_not_write(self, capsys):
+        app = make_journald_app(telegraf=True)
+        app._LogFluxApplication__client = MagicMock()
+        points = [{"measurement": "test", "time": 123, "fields": {"value": 1}}]
+        app.send_points(points)
+        app._LogFluxApplication__client.write_points.assert_not_called()
+        captured = capsys.readouterr()
+        assert "test" in captured.out
+
+    def test_non_telegraf_writes(self):
+        app = make_journald_app(telegraf=False)
+        app._LogFluxApplication__client = MagicMock()
+        points = [{"measurement": "test", "time": 123, "fields": {"value": 1}}]
+        app.send_points(points)
+        app._LogFluxApplication__client.write_points.assert_called_once()
+
+
+class TestRunOnce:
+    def test_writes_timestamp_file(self, tmp_path):
+        rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": re.compile(r"ok")},
+            }
+        ]
+        ts_file = str(tmp_path / "last_ts")
+        app = make_journald_app(rules=rules, config_extra={"last_timestamp_file": ts_file}, telegraf=True)
+
+        stamp = datetime.datetime(2024, 6, 15, 10, 30, 0)
+        messages = [
+            {"MESSAGE": "ok", "__REALTIME_TIMESTAMP": stamp},
+            {},
+        ]
+        journal = MagicMock()
+        journal.get_next = MagicMock(side_effect=messages)
+
+        app.run_once(journal)
+        assert os.path.exists(ts_file)
+        saved = float(open(ts_file).read())
+        assert saved > stamp.timestamp()
+
+    def test_reads_existing_timestamp(self, tmp_path):
+        ts_file = str(tmp_path / "last_ts")
+        with open(ts_file, "w") as f:
+            f.write("1718444400.0")
+
+        app = make_journald_app(config_extra={"last_timestamp_file": ts_file}, telegraf=True)
+
+        journal = MagicMock()
+        journal.get_next = MagicMock(return_value={})
+
+        app.run_once(journal)
+        journal.seek_realtime.assert_called_once()
+
+    def test_writes_timestamp_on_non_matching_messages(self, tmp_path):
+        rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": re.compile(r"NEVER")},
+            }
+        ]
+        ts_file = str(tmp_path / "last_ts")
+        app = make_journald_app(rules=rules, config_extra={"last_timestamp_file": ts_file}, telegraf=True)
+
+        stamp = datetime.datetime(2024, 6, 15, 10, 30, 0)
+        messages = [
+            {"MESSAGE": "no match here", "__REALTIME_TIMESTAMP": stamp},
+            {},
+        ]
+        journal = MagicMock()
+        journal.get_next = MagicMock(side_effect=messages)
+
+        app.run_once(journal)
+        assert os.path.exists(ts_file)
+        saved = float(open(ts_file).read())
+        assert saved > stamp.timestamp()
+
+    def test_saves_timestamp_on_processing_error(self, tmp_path):
+        rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": re.compile(r".*")},
+            }
+        ]
+        ts_file = str(tmp_path / "last_ts")
+        app = make_journald_app(rules=rules, config_extra={"last_timestamp_file": ts_file}, telegraf=True)
+
+        good_stamp = datetime.datetime(2024, 6, 15, 10, 0, 0)
+        bad_stamp = datetime.datetime(2024, 6, 15, 10, 30, 0)
+        messages = [
+            {"MESSAGE": "ok", "__REALTIME_TIMESTAMP": good_stamp},
+            {"MESSAGE": "bad", "__REALTIME_TIMESTAMP": bad_stamp},
+            {},
+        ]
+        journal = MagicMock()
+        journal.get_next = MagicMock(side_effect=messages)
+
+        # Make send_points raise on the second call
+        call_count = 0
+        original_send = app.send_points
+
+        def failing_send(points):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("simulated failure")
+            original_send(points)
+
+        app.send_points = failing_send
+
+        app.run_once(journal)
+        # Timestamp should still be saved despite the error
+        assert os.path.exists(ts_file)
+        saved = float(open(ts_file).read())
+        assert saved > bad_stamp.timestamp()
+
+    def test_saves_timestamp_on_journal_read_error(self, tmp_path):
+        rules = [
+            {
+                "name": "test",
+                "match": {"key": "MESSAGE", "regex": re.compile(r".*")},
+            }
+        ]
+        ts_file = str(tmp_path / "last_ts")
+        app = make_journald_app(rules=rules, config_extra={"last_timestamp_file": ts_file}, telegraf=True)
+
+        stamp = datetime.datetime(2024, 6, 15, 10, 0, 0)
+        messages = [
+            {"MESSAGE": "ok", "__REALTIME_TIMESTAMP": stamp},
+            OSError("journal read error"),
+        ]
+
+        journal = MagicMock()
+
+        def get_next_side_effect():
+            val = messages.pop(0)
+            if isinstance(val, Exception):
+                raise val
+            return val
+
+        journal.get_next = MagicMock(side_effect=get_next_side_effect)
+
+        app.run_once(journal)
+        # Timestamp should be saved up to the last successfully read message
+        assert os.path.exists(ts_file)
+        saved = float(open(ts_file).read())
+        assert saved > stamp.timestamp()
+
+
+class TestFilters:
+    def test_filters_from_config(self):
+        config = {
+            "filters": [
+                {"key": "_SYSTEMD_UNIT", "value": "nginx.service"},
+                {"key": "_SYSTEMD_UNIT", "value": "httpd.service"},
+            ],
+        }
+        app = make_journald_app(config_extra=config)
+        assert len(app.filters) == 2
+        assert app.filters[0]["key"] == "_SYSTEMD_UNIT"
+
+
+class TestNamespace:
+    def test_namespace_from_config(self):
+        app = make_journald_app(config_extra={"namespace": "myns"})
+        assert app.namespace == "myns"
+
+    def test_namespace_default_none(self):
+        app = make_journald_app()
+        assert app.namespace is None
+
+    @patch("logflux.journald._reader_supports_namespace", return_value=True)
+    @patch("logflux.journald.journal.Reader")
+    def test_open_reader_with_namespace(self, mock_reader, mock_supports):
+        app = make_journald_app(config_extra={"namespace": "myns"})
+        app._open_reader()
+        mock_reader.assert_called_once_with(namespace="myns")
+
+    @patch("logflux.journald._reader_supports_namespace", return_value=False)
+    @patch("logflux.journald._namespace_journal_path", return_value="/var/log/journal/abc123.myns")
+    @patch("logflux.journald.journal.Reader")
+    def test_open_reader_namespace_fallback_to_path(self, mock_reader, mock_path, mock_supports):
+        app = make_journald_app(config_extra={"namespace": "myns"})
+        app._open_reader()
+        mock_path.assert_called_once_with("myns")
+        mock_reader.assert_called_once_with(path="/var/log/journal/abc123.myns")
+
+    @patch("logflux.journald.journal.Reader")
+    def test_open_reader_without_namespace(self, mock_reader):
+        app = make_journald_app()
+        app._open_reader()
+        mock_reader.assert_called_once_with()
+
+
+class TestNamespaceJournalPath:
+    def test_finds_namespace_dir(self, tmp_path):
+        ns_dir = tmp_path / "abc123.myns"
+        ns_dir.mkdir()
+        with patch("logflux.journald.glob.glob", return_value=[str(ns_dir)]):
+            assert _namespace_journal_path("myns") == str(ns_dir)
+
+    def test_no_match_raises(self):
+        with patch("logflux.journald.glob.glob", return_value=[]):
+            try:
+                _namespace_journal_path("myns")
+                assert False, "Expected RuntimeError"
+            except RuntimeError as e:
+                assert "no journal directory found" in str(e)
+
+    def test_multiple_matches_raises(self):
+        with patch("logflux.journald.glob.glob", return_value=["/a/x.myns", "/a/y.myns"]):
+            try:
+                _namespace_journal_path("myns")
+                assert False, "Expected RuntimeError"
+            except RuntimeError as e:
+                assert "multiple journal directories" in str(e)

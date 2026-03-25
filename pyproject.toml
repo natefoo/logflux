@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logflux"
+version = "0.2.2"
+description = "Log-to-InfluxDB translator (rsyslog and journald)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Nate Coraor", email = "nate@bx.psu.edu" },
+]
+keywords = ["syslog", "rsyslog", "journald", "systemd", "influx", "influxdb", "grafana"]
+classifiers = [
+    "Natural Language :: English",
+    "Operating System :: POSIX",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "PyYAML",
+    "influxdb",
+    "tzlocal",
+]
+
+[project.urls]
+Homepage = "https://github.com/natefoo/logflux"
+
+[project.scripts]
+logflux = "logflux.main:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["logflux"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = [
+    "influxdb",
+    "systemd.*",
+    "tzlocal",
+]
+ignore_missing_imports = true
+
+[tool.black]
+line-length = 120
+target-version = ["py39"]
