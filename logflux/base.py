@@ -271,9 +271,11 @@ def _escape_newlines(s: str) -> str:
     return s.replace("\r", "\\r").replace("\n", "\\n")
 
 
-def influx_field_value(v: int | float | str) -> str:
+def influx_field_value(v: bool | int | float | str) -> str:
     """Format a value for InfluxDB line protocol field values."""
-    if isinstance(v, float):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    elif isinstance(v, float):
         return str(v)
     elif isinstance(v, int):
         return str(v) + "i"

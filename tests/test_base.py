@@ -41,6 +41,12 @@ class TestInfluxFieldValue:
     def test_string_with_backslash_and_quote(self):
         assert influx_field_value('a\\"b') == '"a\\\\\\"b"'
 
+    def test_bool_true(self):
+        assert influx_field_value(True) == "true"
+
+    def test_bool_false(self):
+        assert influx_field_value(False) == "false"
+
 
 class TestInfluxTagValue:
     def test_plain_string(self):
