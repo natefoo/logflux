@@ -174,7 +174,6 @@ class TestRunOnce:
         app.run_once(journal)
         journal.seek_realtime.assert_called_once()
 
-
     def test_writes_timestamp_on_non_matching_messages(self, tmp_path):
         rules = [
             {

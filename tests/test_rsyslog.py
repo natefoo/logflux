@@ -1,7 +1,7 @@
 import json
 import re
 from argparse import Namespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from logflux.rsyslog import RsyslogApplication
 
@@ -171,3 +171,49 @@ class TestHandle:
         app._LogFluxApplication__client.write_points.assert_called_once()
         points = app._LogFluxApplication__client.write_points.call_args[0][0]
         assert points[0]["fields"]["cpu"] == 95
+
+
+class TestSocketMode:
+    def test_socket_mode_applied(self, tmp_path):
+        sock_path = str(tmp_path / "test.sock")
+        app = make_rsyslog_app(config_extra={"socket": sock_path, "socket_mode": "0600"})
+        app._LogFluxApplication__client = MagicMock()
+
+        def create_sock_file(*args, **kwargs):
+            open(sock_path, "w").close()
+            server = MagicMock()
+            server.serve_forever.side_effect = KeyboardInterrupt
+            return server
+
+        with (
+            patch("logflux.rsyslog.LogFluxServer", side_effect=create_sock_file),
+            patch("logflux.rsyslog.os.chmod") as mock_chmod,
+        ):
+            try:
+                app.run()
+            except KeyboardInterrupt:
+                pass
+
+            mock_chmod.assert_called_once_with(sock_path, 0o600)
+
+    def test_socket_mode_unset_uses_umask(self, tmp_path):
+        sock_path = str(tmp_path / "test.sock")
+        app = make_rsyslog_app(config_extra={"socket": sock_path})
+        app._LogFluxApplication__client = MagicMock()
+
+        def create_sock_file(*args, **kwargs):
+            open(sock_path, "w").close()
+            server = MagicMock()
+            server.serve_forever.side_effect = KeyboardInterrupt
+            return server
+
+        with (
+            patch("logflux.rsyslog.LogFluxServer", side_effect=create_sock_file),
+            patch("logflux.rsyslog.os.chmod") as mock_chmod,
+        ):
+            try:
+                app.run()
+            except KeyboardInterrupt:
+                pass
+
+            mock_chmod.assert_not_called()

@@ -151,9 +151,14 @@ logflux uses a YAML configuration file (default: `logflux.yaml`, override with `
 
 ```yaml
 socket: /tmp/logflux.sock       # Unix socket path (default: /run/logflux.sock)
+socket_mode: "0660"              # Unix socket permissions (octal, default: inherited from umask)
 message_format: json             # "json", "legacy", or omit for auto-detection
 server_type: threading           # "forking", "threading", or omit for single-threaded
 ```
+
+The `socket_mode` option sets the file permissions on the Unix socket after creation. The value is an octal string (e.g.
+`"0660"` to allow group write access, `"0600"` to restrict to the owner only). If omitted, the socket permissions are
+determined by the process umask. Quote the value in YAML to prevent it from being parsed as a decimal integer.
 
 ### journald-specific options
 
@@ -279,3 +284,15 @@ skipped.
 
 If no fields are specified, the default field is `{value: message}` for rsyslog and `{value: MESSAGE}` for journald,
 which stores the full message body.
+
+## Security considerations
+
+### Regex performance (ReDoS)
+
+Rule `regex` patterns and `transform` patterns from the configuration are applied to untrusted log message content.
+Python's `re` engine uses backtracking, which means a poorly written regex can cause catastrophic performance on crafted
+input — a class of denial-of-service known as [ReDoS](https://en.wikipedia.org/wiki/ReDoS).
+
+To avoid this, ensure your patterns do not contain nested quantifiers (e.g. `(a+)+`, `(a*)*`, `(a|b*)+`) or other
+constructs that create exponential backtracking. Prefer specific character classes (`\d+`, `[^"]+`) over greedy
+wildcards (`.*`), and anchor patterns where possible.

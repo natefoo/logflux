@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import socketserver
 from collections.abc import Callable
@@ -144,6 +145,9 @@ class RsyslogApplication(LogFluxApplication):
             self.server = SERVER_CLASS_MAP[self.config["server_type"]](self.socket, MessageHandler)
         else:
             self.server = LogFluxServer(self.socket, MessageHandler)
+        socket_mode = self.config.get("socket_mode")
+        if socket_mode is not None:
+            os.chmod(self.socket, int(str(socket_mode), 8))
         self.server.app = self
         try:
             self.server.serve_forever()
