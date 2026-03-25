@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "logflux"
-version = "0.2.2"
+version = "1.0.0"
 description = "Log-to-InfluxDB translator (rsyslog and journald)"
 readme = "README.md"
 license = "MIT"
