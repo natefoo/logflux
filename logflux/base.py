@@ -246,9 +246,9 @@ class LogFluxApplication:
         for point in points:
             tags = ""
             if point.get("tags"):
-                tags = "," + fmtarg(point.get("tags", {}))
+                tags = "," + fmttags(point.get("tags", {}))
             if self.args.verbose:
-                print(f"{point['measurement']}{tags} {fmtarg(point['fields'])} {point['time']}")
+                print(f"{point['measurement']}{tags} {fmtfields(point['fields'])} {point['time']}")
         if points:
             self.client.write_points(points)
 
@@ -264,14 +264,32 @@ def log(msg: str, *args: Any, **kwargs: Any) -> None:
         print(msg.format(*args, **kwargs), file=sys.stderr)
 
 
-def influxarg(v: int | float | str) -> str:
+def _escape_newlines(s: str) -> str:
+    return s.replace("\r", "\\r").replace("\n", "\\n")
+
+
+def influx_field_value(v: int | float | str) -> str:
+    """Format a value for InfluxDB line protocol field values."""
     if isinstance(v, float):
         return str(v)
     elif isinstance(v, int):
         return str(v) + "i"
     else:
-        return '"' + str(v).replace('"', '\\"') + '"'
+        s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+        return '"' + _escape_newlines(s) + '"'
 
 
-def fmtarg(d: dict[str, Any]) -> str:
-    return ",".join([f"{k}={influxarg(v)}" for k, v in d.items()])
+def influx_tag_value(v: str) -> str:
+    """Escape a value for use as an InfluxDB line protocol tag value."""
+    s = str(v).replace("\\", "\\\\").replace(",", "\\,").replace("=", "\\=").replace(" ", "\\ ")
+    return _escape_newlines(s)
+
+
+def fmtfields(d: dict[str, Any]) -> str:
+    """Format a dict as InfluxDB line protocol field set."""
+    return ",".join([f"{k}={influx_field_value(v)}" for k, v in d.items()])
+
+
+def fmttags(d: dict[str, Any]) -> str:
+    """Format a dict as InfluxDB line protocol tag set."""
+    return ",".join([f"{k}={influx_tag_value(v)}" for k, v in d.items()])

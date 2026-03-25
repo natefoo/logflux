@@ -10,7 +10,7 @@ from time import sleep
 import tzlocal
 from systemd import journal
 
-from .base import LogFluxApplication, Message, Point, Rule, fmtarg, log
+from .base import LogFluxApplication, Message, Point, Rule, fmtfields, fmttags, log
 
 LAST_TIMESTAMP_FILE = ".last_timestamp"
 
@@ -65,9 +65,9 @@ class JournaldApplication(LogFluxApplication):
         for point in points:
             tags = ""
             if point.get("tags"):
-                tags = "," + fmtarg(point.get("tags", {}))
+                tags = "," + fmttags(point.get("tags", {}))
             if self.args.telegraf or self.args.verbose:
-                print(f"{point['measurement']}{tags} {fmtarg(point['fields'])} {point['time']}")
+                print(f"{point['measurement']}{tags} {fmtfields(point['fields'])} {point['time']}")
         if points and not self.args.telegraf:
             self.client.write_points(points)
 

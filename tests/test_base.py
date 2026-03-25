@@ -6,39 +6,87 @@ import pytest
 
 from logflux.base import (
     LogFluxApplication,
-    fmtarg,
-    influxarg,
+    fmtfields,
+    fmttags,
+    influx_tag_value,
+    influx_field_value,
     safe_eval_math,
 )
 
 # -- Utility functions --------------------------------------------------------
 
 
-class TestInfluxarg:
+class TestInfluxFieldValue:
     def test_float(self):
-        assert influxarg(3.14) == "3.14"
+        assert influx_field_value(3.14) == "3.14"
 
     def test_int(self):
-        assert influxarg(42) == "42i"
+        assert influx_field_value(42) == "42i"
 
     def test_string(self):
-        assert influxarg("hello") == '"hello"'
+        assert influx_field_value("hello") == '"hello"'
 
     def test_string_with_quotes(self):
-        assert influxarg('say "hi"') == '"say \\"hi\\""'
+        assert influx_field_value('say "hi"') == '"say \\"hi\\""'
+
+    def test_string_with_backslash(self):
+        assert influx_field_value("path\\to") == '"path\\\\to"'
+
+    def test_string_with_newline(self):
+        assert influx_field_value("line1\nline2") == '"line1\\nline2"'
+
+    def test_string_with_carriage_return(self):
+        assert influx_field_value("line1\rline2") == '"line1\\rline2"'
+
+    def test_string_with_backslash_and_quote(self):
+        assert influx_field_value('a\\"b') == '"a\\\\\\"b"'
 
 
-class TestFmtarg:
+class TestInfluxTagValue:
+    def test_plain_string(self):
+        assert influx_tag_value("hello") == "hello"
+
+    def test_escapes_comma(self):
+        assert influx_tag_value("a,b") == "a\\,b"
+
+    def test_escapes_equals(self):
+        assert influx_tag_value("a=b") == "a\\=b"
+
+    def test_escapes_space(self):
+        assert influx_tag_value("a b") == "a\\ b"
+
+    def test_escapes_backslash(self):
+        assert influx_tag_value("a\\b") == "a\\\\b"
+
+    def test_escapes_newline(self):
+        assert influx_tag_value("a\nb") == "a\\nb"
+
+    def test_escapes_carriage_return(self):
+        assert influx_tag_value("a\rb") == "a\\rb"
+
+    def test_multiple_special_chars(self):
+        assert influx_tag_value("a=b,c d") == "a\\=b\\,c\\ d"
+
+
+class TestFmttags:
     def test_single(self):
-        assert fmtarg({"cpu": 0.5}) == "cpu=0.5"
+        assert fmttags({"host": "web1"}) == "host=web1"
+
+    def test_escapes_values(self):
+        assert fmttags({"path": "/a b"}) == "path=/a\\ b"
+
+
+class TestFmtfields:
+    def test_single(self):
+        assert fmtfields({"cpu": 0.5}) == "cpu=0.5"
 
     def test_multiple(self):
-        result = fmtarg({"value": 42, "msg": "ok"})
+        result = fmtfields({"value": 42, "msg": "ok"})
         assert "value=42i" in result
         assert 'msg="ok"' in result
 
     def test_empty(self):
-        assert fmtarg({}) == ""
+        assert fmtfields({}) == ""
 
 
 # -- Helper to build a testable app without hitting InfluxDB or files ---------
