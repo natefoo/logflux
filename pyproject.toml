@@ -23,6 +23,7 @@ classifiers = [
 dependencies = [
     "PyYAML",
     "influxdb",
+    "tzlocal",
 ]
 
 [project.urls]

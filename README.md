@@ -8,8 +8,8 @@ Parse log messages and send regex-matched values to InfluxDB. Supports rsyslog (
 pip install logflux
 ```
 
-For journald support, you also need `python-systemd` and `tzlocal`. `python-systemd` is a C binding for
-`libsystemd` and should be installed via your system package manager:
+For journald support, you also need `python-systemd`, a C binding for `libsystemd` that should be installed via your
+system package manager:
 
 ```
 # Fedora/RHEL/CentOS
@@ -17,9 +17,6 @@ dnf install python3-systemd
 
 # Debian/Ubuntu
 apt install python3-systemd
-
-# Then install tzlocal
-pip install tzlocal
 ```
 
 ## Usage
