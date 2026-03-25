@@ -85,18 +85,35 @@ class JournaldApplication(LogFluxApplication):
     def handle_all(self, j: journal.Reader) -> float | None:
         stamp: float | None = None
         while msg := j.get_next():
+            stamp = msg["__REALTIME_TIMESTAMP"].timestamp()
             points = self.parse_message(msg)
             if points:
-                stamp = msg["__REALTIME_TIMESTAMP"].timestamp()
                 self.send_points(points)
         return stamp
 
+    def _save_timestamp(self, stamp: float) -> None:
+        with open(self.last_timestamp_file, "w") as f:
+            f.write(str(stamp + 0.000001))
+
     def run_once(self, j: journal.Reader) -> None:
         if os.path.exists(self.last_timestamp_file):
-            j.seek_realtime(datetime.datetime.fromtimestamp(float(open(self.last_timestamp_file).read())))
-        stamp = self.handle_all(j)
-        if stamp:
-            open(self.last_timestamp_file, "w").write(str(stamp + 0.000001))
+            with open(self.last_timestamp_file) as f:
+                j.seek_realtime(datetime.datetime.fromtimestamp(float(f.read())))
+        stamp: float | None = None
+        try:
+            while msg := j.get_next():
+                stamp = msg["__REALTIME_TIMESTAMP"].timestamp()
+                try:
+                    points = self.parse_message(msg)
+                    if points:
+                        self.send_points(points)
+                except Exception:
+                    log("error processing journal entry", exception=True)
+        except Exception:
+            log("error reading journal", exception=True)
+        finally:
+            if stamp is not None:
+                self._save_timestamp(stamp)
 
     def run_continuous(self, j: journal.Reader) -> None:
         j.seek_tail()
